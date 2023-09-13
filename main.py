@@ -1,25 +1,27 @@
 from enum import Enum
 from pydantic import BaseModel
-from fastapi import FastAPI, HTTPException, Depends, Header
+from fastapi import FastAPI, HTTPException, Request
 import httpx
 from kafka import KafkaProducer
 from starlette.responses import RedirectResponse
+import json
 
 app = FastAPI()
 
-# Enum for Spotify API response type
-class ItemType(str, Enum):
-    track = "track"
-    episode = "episode"
-
-# Pydantic model for a single track/episode item
+# Pydantic model for a single returned item
 class Item(BaseModel):
-    name: str
-    type: ItemType
+    track: dict
+    played_at: str # type: datetime
+    context: dict
 
 # Pydantic model for the recently played tracks response
 class RecentlyPlayedResponse(BaseModel):
-    items: List[Item]
+    href: str
+    limit: int
+    next: str
+    cursors: dict
+    total: int
+    items: list[Item]
 
 # Kafka producer configuration
 producer_config = {
@@ -27,8 +29,11 @@ producer_config = {
 }
 
 # Spotify application credentials
-client_id = "your_client_id"
-client_secret = "your_client_secret"
+with open("config/config.json", "r") as config_file:
+    config_data = json.load(config_file)
+
+client_id = config_data["spotify"]["client_id"]
+client_secret = config_data["spotify"]["client_secret"]
 redirect_uri = "http://localhost:8888/callback"
 scope = "user-read-recently-played"  # The scope determines the access level your application has.
 
@@ -63,8 +68,6 @@ async def spotify_callback(
         token_data = response.json()
         # Extract the access token from token_data
         access_token = token_data.get("access_token")
-        # You can store the access token securely and use it to authenticate with the Spotify API.
-        # Make sure to implement proper token management and security measures.
 
         # Now, you can combine data streaming to Kafka with Spotify API requests using the access token.
         recently_played_data = await get_recently_played_with_token(access_token)
