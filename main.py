@@ -1,63 +1,59 @@
-from enum import Enum
-from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException, Request
-import httpx
-from kafka import KafkaProducer
+from httpx import AsyncClient
 from starlette.responses import RedirectResponse
+from kafka import KafkaProducer
 import json
+import requests
+import logging
+
 
 app = FastAPI()
 
-# Pydantic model for a single returned item
-class Item(BaseModel):
-    track: dict
-    played_at: str # type: datetime
-    context: dict
+# Load Spotify application credentials from your config file
+with open("config/config.json", "r") as config_file:
+    config_data = json.load(config_file)
 
-# Pydantic model for the recently played tracks response
-class RecentlyPlayedResponse(BaseModel):
-    href: str
-    limit: int
-    next: str
-    cursors: dict
-    total: int
-    items: list[Item]
+CLIENT_ID = config_data["spotify"]["client_id"]
+CLIENT_SECRET = config_data["spotify"]["client_secret"]
+REDIRECT_URI = "http://localhost:8000/callback" 
+SCOPE = "user-read-recently-played"  # The scope determines the access level your application has.
 
 # Kafka producer configuration
 producer_config = {
     "bootstrap_servers": "localhost:9092",  # Replace with your Kafka broker(s)
 }
 
-# Spotify application credentials
-with open("config/config.json", "r") as config_file:
-    config_data = json.load(config_file)
+@app.get("/login")
+def login_spotify():
+    STATE = generate_random_string(16)  # You can define your generate_random_string function
+    #SCOPE = "user-read-private user-read-email"
 
-client_id = config_data["spotify"]["client_id"]
-client_secret = config_data["spotify"]["client_secret"]
-redirect_uri = "http://localhost:8888/callback"
-scope = "user-read-recently-played"  # The scope determines the access level your application has.
-
-@app.get("/authorize")
-def authorize_spotify():
     # Redirect the user to the Spotify Accounts service for authorization
-    spotify_auth_url = f"https://accounts.spotify.com/authorize?client_id={client_id}&redirect_uri={redirect_uri}&scope={scope}&response_type=code"
+    spotify_auth_url = f"https://accounts.spotify.com/authorize?client_id={CLIENT_ID}&redirect_uri={REDIRECT_URI}&scope={SCOPE}&response_type=code&state={STATE}"
     return RedirectResponse(url=spotify_auth_url)
+
+# For generating a random string to use for the state parameter
+def generate_random_string(length):
+    import random
+    import string
+    return ''.join(random.choice(string.ascii_letters + string.digits) for _ in range(length))
 
 @app.get("/callback")
 async def spotify_callback(
     code: str,
+    state: str,
     request: Request,
 ):
     # Exchange the authorization code for an access token
     token_url = "https://accounts.spotify.com/api/token"
     data = {
         "code": code,
-        "redirect_uri": redirect_uri,
+        "redirect_uri": REDIRECT_URI,
         "grant_type": "authorization_code",
     }
-    auth = (client_id, client_secret)
+    auth = (CLIENT_ID, CLIENT_SECRET)
 
-    async with httpx.AsyncClient() as client:
+    async with AsyncClient() as client:
         response = await client.post(
             token_url,
             data=data,
@@ -65,6 +61,7 @@ async def spotify_callback(
         )
 
     if response.status_code == 200:
+        print("Successfully obtained access token")
         token_data = response.json()
         # Extract the access token from token_data
         access_token = token_data.get("access_token")
@@ -84,21 +81,22 @@ async def get_recently_played_with_token(access_token: str):
         "Authorization": f"Bearer {access_token}"
     }
 
-    async with httpx.AsyncClient() as client:
+    async with AsyncClient() as client:
         response = await client.get(url, headers=headers)
+    # response = requests.get(url, headers=headers)
 
     if response.status_code == 200:
         recently_played_data = response.json()
-
+        print(recently_played_data)
         # Create a Kafka producer instance
-        producer = KafkaProducer(**producer_config, value_serializer=lambda v: json.dumps(v).encode('utf-8'))
+        # producer = KafkaProducer(**producer_config, value_serializer=lambda v: json.dumps(v).encode('utf-8'))
 
-        for item in recently_played_data['items']:
-            # Send each item to a Kafka topic (e.g., "spotify_recently_played")
-            producer.send("spotify_recently_played", value=item.dict())
+        # for item in recently_played_data['items']:
+        #     # Send each item to a Kafka topic (e.g., "spotify_recently_played")
+        #     producer.send("spotify_recently_played", value=item)
 
-        # Close the producer to flush any remaining messages
-        producer.close()
+        # # Close the producer to flush any remaining messages
+        # producer.close()
 
         return recently_played_data
     else:
