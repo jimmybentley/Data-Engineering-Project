@@ -1,10 +1,8 @@
 from fastapi import FastAPI, HTTPException, Request
 from httpx import AsyncClient
 from starlette.responses import RedirectResponse
-from kafka import KafkaProducer
 import json
-import requests
-import logging
+from confluent_kafka import Producer
 
 
 app = FastAPI()
@@ -72,6 +70,18 @@ async def spotify_callback(
     else:
         raise HTTPException(status_code=response.status_code, detail="Failed to obtain access token")
 
+
+def read_ccloud_config(config_file):
+    conf = {}
+    with open(config_file) as fh:
+        for line in fh:
+            line = line.strip()
+            if len(line) != 0 and line[0] != "#":
+                parameter, value = line.strip().split('=', 1)
+                conf[parameter] = value.strip()
+    return conf
+
+
 async def get_recently_played_with_token(access_token: str):
     # Spotify API endpoint URL
     url = "https://api.spotify.com/v1/me/player/recently-played?limit=50"
@@ -87,16 +97,16 @@ async def get_recently_played_with_token(access_token: str):
 
     if response.status_code == 200:
         recently_played_data = response.json()
-        print(recently_played_data)
-        # Create a Kafka producer instance
-        # producer = KafkaProducer(**producer_config, value_serializer=lambda v: json.dumps(v).encode('utf-8'))
+        #print(recently_played_data)
+        #Create a Kafka producer instance
+        producer = Producer(read_ccloud_config("config/client.properties"))
 
-        # for item in recently_played_data['items']:
-        #     # Send each item to a Kafka topic (e.g., "spotify_recently_played")
-        #     producer.send("spotify_recently_played", value=item)
+        for item in recently_played_data['items']:
+            # Send each item to a Kafka topic (e.g., "spotify_recently_played")
+            producer.produce("spotify_recently_played", value=item)
 
-        # # Close the producer to flush any remaining messages
-        # producer.close()
+        # Close the producer to flush any remaining messages
+        producer.close()
 
         return recently_played_data
     else:
